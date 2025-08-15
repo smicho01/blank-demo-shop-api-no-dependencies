@@ -1,0 +1,127 @@
+pipeline {
+  agent any
+
+  parameters {
+    booleanParam(name: 'ENABLE_SERVICE_X', defaultValue: true, description: 'Enable service X')
+    booleanParam(name: 'RUN_TESTS', defaultValue: true, description: 'Run the Test stage')
+    booleanParam(name: 'RUN_TESTS_COVERAGE', defaultValue: true, description: 'Run the Test Coverage stage')
+    choice(name: 'ENVIRONMENT', choices: ['ec2-xlarge-dev1', 'ec2-xlarge-dev2', 'ec2-xlarge-prod'], description: 'Select the environment to deploy to')
+    string(name: 'DEPLOY_BRANCH', defaultValue: 'master', description: 'Which branch to deploy')
+  }
+
+  stages {
+    stage('Clean Up') {
+      steps {
+        deleteDir()
+      }
+    }
+
+    stage('Clone Repository') {
+      steps {
+        sh """
+          git clone --branch "${params.DEPLOY_BRANCH}" --single-branch \
+            https://github.com/smicho01/blank-demo-shop-api-no-dependencies.git
+        """
+      }
+    }
+
+    stage('Build') {
+      steps {
+        dir('blank-demo-shop-api-no-dependencies') {
+          sh "mvn -B -DskipTests=true -DenableServiceX=${params.ENABLE_SERVICE_X} clean package"
+        }
+      }
+    }
+
+    stage('Test') {
+      when {
+        expression { return params.RUN_TESTS }
+      }
+      steps {
+        dir('blank-demo-shop-api-no-dependencies') {
+          sh 'mvn -B test'
+        }
+      }
+
+    }
+
+    stage('Test Coverage') {
+      when {
+        expression { return params.RUN_TESTS_COVERAGE }
+      }
+      steps {
+        dir('blank-demo-shop-api-no-dependencies') {
+          sh 'mvn -B verify'
+        }
+      }
+
+    }
+
+    stage('Dummy Deploy') {
+      steps {
+        echo "Deployment environment: ${params.ENVIRONMENT}"
+        echo "Deploying branch: ${params.DEPLOY_BRANCH}"
+        echo "Service X enabled: ${params.ENABLE_SERVICE_X}"
+
+
+        script {
+          if (params.ENVIRONMENT == 'ec2-xlarge-prod') {
+            echo "Production deployment - additional checks required"
+            // Add production-specific deployment steps
+          } else {
+            echo "Development deployment"
+            // Add development deployment steps
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    success {
+        slackSend(
+        channel: '#jenkins',
+        color: 'good',
+        message: "✅ Build successful: ${env.JOB_NAME} - ${env.BUILD_NUMBER}\n" +
+                "🌍 Environment: ${params.ENVIRONMENT}\n" +
+                "🌿 Branch: ${params.DEPLOY_BRANCH}\n" +
+                "⚙️ Service X: ${params.ENABLE_SERVICE_X ? 'Enabled' : 'Disabled'}\n" +
+                "🧪 Tests: ${params.RUN_TESTS ? 'Ran' : 'Skipped'}\n" +
+                "📊 Coverage: ${params.RUN_TESTS_COVERAGE ? 'Ran' : 'Skipped'}\n" +
+                "🔗 Build URL: ${env.BUILD_URL}"
+        )
+    }
+
+    failure {
+        slackSend(
+        channel: '#jenkins',
+        color: 'danger',
+        message: "❌ Build failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER}\n" +
+                "🌍 Environment: ${params.ENVIRONMENT}\n" +
+                "🌿 Branch: ${params.DEPLOY_BRANCH}\n" +
+                "⚙️ Service X: ${params.ENABLE_SERVICE_X ? 'Enabled' : 'Disabled'}\n" +
+                "🧪 Tests: ${params.RUN_TESTS ? 'Ran' : 'Skipped'}\n" +
+                "📊 Coverage: ${params.RUN_TESTS_COVERAGE ? 'Ran' : 'Skipped'}\n" +
+                "🔗 Build URL: ${env.BUILD_URL}"
+        )
+    }
+
+    unstable {
+        slackSend(
+        channel: '#jenkins',
+        color: 'warning',
+        message: "⚠️ Build unstable: ${env.JOB_NAME} - ${env.BUILD_NUMBER}\n" +
+                "🌍 Environment: ${params.ENVIRONMENT}\n" +
+                "🌿 Branch: ${params.DEPLOY_BRANCH}\n" +
+                "⚙️ Service X: ${params.ENABLE_SERVICE_X ? 'Enabled' : 'Disabled'}\n" +
+                "🧪 Tests: ${params.RUN_TESTS ? 'Ran' : 'Skipped'}\n" +
+                "📊 Coverage: ${params.RUN_TESTS_COVERAGE ? 'Ran' : 'Skipped'}\n" +
+                "🔗 Build URL: ${env.BUILD_URL}"
+        )
+    }
+
+    always {
+        cleanWs()
+    }
+  }
+}
