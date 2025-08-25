@@ -66,8 +66,8 @@ pipeline {
       post {
         always {
           dir('blank-demo-shop-api-no-dependencies') {
-            // Publish test results
-            publishTestResults testResultsPattern: 'target/surefire-reports/*.xml'
+            // Publish test results using junit step
+            junit testResultsPattern: 'target/surefire-reports/*.xml', allowEmptyResults: true
           }
         }
       }
@@ -340,7 +340,7 @@ pipeline {
     always {
       // Clean up Docker images to save space
       script {
-        if (params.BUILD_DOCKER_IMAGE) {
+        if (params.BUILD_DOCKER_IMAGE && env.DOCKER_BUILD_TAG) {
           sh """
             # Remove build-specific images to save disk space
             docker rmi ${env.DOCKER_BUILD_TAG} || true
@@ -348,6 +348,11 @@ pipeline {
             # docker rmi ${env.DOCKER_IMAGE_TAG} || true
 
             # Clean up dangling images
+            docker image prune -f || true
+          """
+        } else if (params.BUILD_DOCKER_IMAGE) {
+          sh """
+            # Clean up dangling images only if no specific tags to remove
             docker image prune -f || true
           """
         }
