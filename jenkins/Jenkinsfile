@@ -1,12 +1,25 @@
 pipeline {
   agent any
 
+//   triggers {
+//     pollSCM('0 2 * * *')
+//   }
+
   parameters {
     booleanParam(name: 'ENABLE_SERVICE_X', defaultValue: true, description: 'Enable service X')
     booleanParam(name: 'RUN_TESTS', defaultValue: true, description: 'Run the Test stage')
     booleanParam(name: 'RUN_TESTS_COVERAGE', defaultValue: true, description: 'Run the Test Coverage stage')
+    booleanParam(name: 'BUILD_DOCKER_IMAGE', defaultValue: true, description: 'Build Docker image')
+    booleanParam(name: 'PUSH_DOCKER_IMAGE', defaultValue: false, description: 'Push Docker image to registry')
     choice(name: 'ENVIRONMENT', choices: ['ec2-xlarge-dev1', 'ec2-xlarge-dev2', 'ec2-xlarge-prod'], description: 'Select the environment to deploy to')
     string(name: 'DEPLOY_BRANCH', defaultValue: 'master', description: 'Which branch to deploy')
+    string(name: 'DOCKER_TAG', defaultValue: 'latest', description: 'Docker image tag')
+  }
+
+  environment {
+    DOCKER_IMAGE_NAME = 'blank-demo-api'
+    DOCKER_REGISTRY = 'your-dockerhub-username' // Update this with your Docker Hub username
+    MAVEN_OPTS = '-Dmaven.repo.local=.m2/repository'
   }
 
   stages {
@@ -25,10 +38,18 @@ pipeline {
       }
     }
 
-    stage('Build') {
+    stage('Build Application') {
       steps {
         dir('blank-demo-shop-api-no-dependencies') {
           sh "mvn -B -DskipTests=true -DenableServiceX=${params.ENABLE_SERVICE_X} clean package"
+        }
+      }
+      post {
+        success {
+          // Archive the built JAR file
+          dir('blank-demo-shop-api-no-dependencies') {
+            archiveArtifacts artifacts: 'target/*.jar', allowEmptyArchive: false
+          }
         }
       }
     }
@@ -42,7 +63,14 @@ pipeline {
           sh 'mvn -B test'
         }
       }
-
+      post {
+        always {
+          dir('blank-demo-shop-api-no-dependencies') {
+            // Publish test results
+            publishTestResults testResultsPattern: 'target/surefire-reports/*.xml'
+          }
+        }
+      }
     }
 
     stage('Test Coverage') {
@@ -54,23 +82,156 @@ pipeline {
           sh 'mvn -B verify'
         }
       }
-
+      post {
+        success {
+          dir('blank-demo-shop-api-no-dependencies') {
+            // Publish coverage reports if JaCoCo plugin is available
+            publishHTML([
+              allowMissing: false,
+              alwaysLinkToLastBuild: true,
+              keepAll: true,
+              reportDir: 'target/site/jacoco',
+              reportFiles: 'index.html',
+              reportName: 'JaCoCo Coverage Report'
+            ])
+          }
+        }
+      }
     }
 
-    stage('Dummy Deploy') {
+    stage('Build Docker Image') {
+      when {
+        expression { return params.BUILD_DOCKER_IMAGE }
+      }
+      steps {
+        script {
+          dir('blank-demo-shop-api-no-dependencies') {
+            // Build Docker image
+            def imageTag = "${env.DOCKER_REGISTRY}/${env.DOCKER_IMAGE_NAME}:${params.DOCKER_TAG}"
+            def buildArgs = "--build-arg ENABLE_SERVICE_X=${params.ENABLE_SERVICE_X}"
+
+            echo "Building Docker image: ${imageTag}"
+            sh "docker build ${buildArgs} -t ${imageTag} ."
+
+            // Also tag with build number for tracking
+            def buildTag = "${env.DOCKER_REGISTRY}/${env.DOCKER_IMAGE_NAME}:build-${env.BUILD_NUMBER}"
+            sh "docker tag ${imageTag} ${buildTag}"
+
+            // Store image info for later stages
+            env.DOCKER_IMAGE_TAG = imageTag
+            env.DOCKER_BUILD_TAG = buildTag
+
+            echo "Docker image built successfully: ${imageTag}"
+            echo "Build-specific tag: ${buildTag}"
+          }
+        }
+      }
+      post {
+        success {
+          echo "✅ Docker image build completed"
+        }
+        failure {
+          echo "❌ Docker image build failed"
+        }
+      }
+    }
+
+    stage('Test Docker Image') {
+      when {
+        expression { return params.BUILD_DOCKER_IMAGE }
+      }
+      steps {
+        script {
+          echo "Testing Docker image..."
+          // Basic smoke test - run container and check if it starts
+          sh """
+            # Run container in detached mode
+            docker run -d --name test-container-${env.BUILD_NUMBER} \
+              -p 8080:8080 \
+              -e ENABLE_SERVICE_X=${params.ENABLE_SERVICE_X} \
+              ${env.DOCKER_IMAGE_TAG}
+
+            # Wait a bit for startup
+            sleep 30
+
+            # Test if application is responding
+            curl -f http://localhost:8080/customer || (echo "Health check failed" && exit 1)
+
+            echo "✅ Docker image test passed"
+          """
+        }
+      }
+      post {
+        always {
+          // Clean up test container
+          sh """
+            docker stop test-container-${env.BUILD_NUMBER} || true
+            docker rm test-container-${env.BUILD_NUMBER} || true
+          """
+        }
+      }
+    }
+
+    stage('Push Docker Image') {
+      when {
+        allOf {
+          expression { return params.BUILD_DOCKER_IMAGE }
+          expression { return params.PUSH_DOCKER_IMAGE }
+        }
+      }
+      steps {
+        script {
+          withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials',
+                                          usernameVariable: 'DOCKER_USERNAME',
+                                          passwordVariable: 'DOCKER_PASSWORD')]) {
+            echo "Logging into Docker registry..."
+            sh "echo \$DOCKER_PASSWORD | docker login -u \$DOCKER_USERNAME --password-stdin"
+
+            echo "Pushing Docker image: ${env.DOCKER_IMAGE_TAG}"
+            sh "docker push ${env.DOCKER_IMAGE_TAG}"
+
+            echo "Pushing build-specific tag: ${env.DOCKER_BUILD_TAG}"
+            sh "docker push ${env.DOCKER_BUILD_TAG}"
+
+            echo "✅ Docker images pushed successfully"
+          }
+        }
+      }
+      post {
+        always {
+          // Logout from Docker registry
+          sh "docker logout || true"
+        }
+      }
+    }
+
+    stage('Deploy') {
       steps {
         echo "Deployment environment: ${params.ENVIRONMENT}"
         echo "Deploying branch: ${params.DEPLOY_BRANCH}"
         echo "Service X enabled: ${params.ENABLE_SERVICE_X}"
 
-
         script {
+          if (params.BUILD_DOCKER_IMAGE) {
+            echo "Docker image available: ${env.DOCKER_IMAGE_TAG}"
+            echo "Build-specific tag: ${env.DOCKER_BUILD_TAG}"
+          }
+
           if (params.ENVIRONMENT == 'ec2-xlarge-prod') {
             echo "Production deployment - additional checks required"
             // Add production-specific deployment steps
+            // Example: deploy using Docker image
+            if (params.BUILD_DOCKER_IMAGE) {
+              echo "Would deploy Docker image: ${env.DOCKER_IMAGE_TAG}"
+              // sh "docker-compose -f docker-compose.prod.yml up -d"
+            }
           } else {
             echo "Development deployment"
             // Add development deployment steps
+            if (params.BUILD_DOCKER_IMAGE) {
+              echo "Would deploy Docker image: ${env.DOCKER_IMAGE_TAG}"
+              // sh "docker run -d -p 8080:8080 ${env.DOCKER_IMAGE_TAG}"
+            }
           }
         }
       }
@@ -79,35 +240,52 @@ pipeline {
 
   post {
     success {
-        slackSend(
-        channel: '#jenkins',
-        color: 'good',
-        message: "✅ Build successful: ${env.JOB_NAME} - ${env.BUILD_NUMBER}\n" +
-                "🌍 Environment: ${params.ENVIRONMENT}\n" +
-                "🌿 Branch: ${params.DEPLOY_BRANCH}\n" +
-                "⚙️ Service X: ${params.ENABLE_SERVICE_X ? 'Enabled' : 'Disabled'}\n" +
-                "🧪 Tests: ${params.RUN_TESTS ? 'Ran' : 'Skipped'}\n" +
-                "📊 Coverage: ${params.RUN_TESTS_COVERAGE ? 'Ran' : 'Skipped'}\n" +
-                "🔗 Build URL: ${env.BUILD_URL}"
-        )
-    }
+      script {
+        def dockerInfo = ""
+        if (params.BUILD_DOCKER_IMAGE) {
+          dockerInfo = "\n🐳 Docker Image: ${env.DOCKER_IMAGE_TAG ?: 'Not built'}"
+          if (params.PUSH_DOCKER_IMAGE) {
+            dockerInfo += "\n📤 Pushed to Registry: Yes"
+          }
+        }
 
+        slackSend(
+          channel: '#jenkins',
+          color: 'good',
+          message: "✅ Build successful: ${env.JOB_NAME} - ${env.BUILD_NUMBER}\n" +
+                  "🌍 Environment: ${params.ENVIRONMENT}\n" +
+                  "🌿 Branch: ${params.DEPLOY_BRANCH}\n" +
+                  "⚙️ Service X: ${params.ENABLE_SERVICE_X ? 'Enabled' : 'Disabled'}\n" +
+                  "🧪 Tests: ${params.RUN_TESTS ? 'Ran' : 'Skipped'}\n" +
+                  "📊 Coverage: ${params.RUN_TESTS_COVERAGE ? 'Ran' : 'Skipped'}" +
+                  dockerInfo + "\n" +
+                  "🔗 Build URL: ${env.BUILD_URL}"
+        )
+      }
+    }
     failure {
-        slackSend(
-        channel: '#jenkins',
-        color: 'danger',
-        message: "❌ Build failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER}\n" +
-                "🌍 Environment: ${params.ENVIRONMENT}\n" +
-                "🌿 Branch: ${params.DEPLOY_BRANCH}\n" +
-                "⚙️ Service X: ${params.ENABLE_SERVICE_X ? 'Enabled' : 'Disabled'}\n" +
-                "🧪 Tests: ${params.RUN_TESTS ? 'Ran' : 'Skipped'}\n" +
-                "📊 Coverage: ${params.RUN_TESTS_COVERAGE ? 'Ran' : 'Skipped'}\n" +
-                "🔗 Build URL: ${env.BUILD_URL}"
-        )
-    }
+      script {
+        def dockerInfo = ""
+        if (params.BUILD_DOCKER_IMAGE) {
+          dockerInfo = "\n🐳 Docker Build: Failed"
+        }
 
-    unstable {
         slackSend(
+          channel: '#jenkins',
+          color: 'danger',
+          message: "❌ Build failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER}\n" +
+                  "🌍 Environment: ${params.ENVIRONMENT}\n" +
+                  "🌿 Branch: ${params.DEPLOY_BRANCH}\n" +
+                  "⚙️ Service X: ${params.ENABLE_SERVICE_X ? 'Enabled' : 'Disabled'}\n" +
+                  "🧪 Tests: ${params.RUN_TESTS ? 'Ran' : 'Skipped'}\n" +
+                  "📊 Coverage: ${params.RUN_TESTS_COVERAGE ? 'Ran' : 'Skipped'}" +
+                  dockerInfo + "\n" +
+                  "🔗 Build URL: ${env.BUILD_URL}"
+        )
+      }
+    }
+    unstable {
+      slackSend(
         channel: '#jenkins',
         color: 'warning',
         message: "⚠️ Build unstable: ${env.JOB_NAME} - ${env.BUILD_NUMBER}\n" +
@@ -117,11 +295,24 @@ pipeline {
                 "🧪 Tests: ${params.RUN_TESTS ? 'Ran' : 'Skipped'}\n" +
                 "📊 Coverage: ${params.RUN_TESTS_COVERAGE ? 'Ran' : 'Skipped'}\n" +
                 "🔗 Build URL: ${env.BUILD_URL}"
-        )
+      )
     }
-
     always {
-        cleanWs()
+      // Clean up Docker images to save space
+      script {
+        if (params.BUILD_DOCKER_IMAGE) {
+          sh """
+            # Remove build-specific images to save disk space
+            docker rmi ${env.DOCKER_BUILD_TAG} || true
+            # Optionally remove the main tag too (uncomment if needed)
+            # docker rmi ${env.DOCKER_IMAGE_TAG} || true
+
+            # Clean up dangling images
+            docker image prune -f || true
+          """
+        }
+      }
+      cleanWs()
     }
   }
 }
