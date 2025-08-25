@@ -144,23 +144,14 @@ pipeline {
         script {
           echo "Testing Docker image..."
 
-          // Find an available port
-          def testPort = sh(
-            script: "python3 -c 'import socket; s=socket.socket(); s.bind((\"\", 0)); print(s.getsockname()[1]); s.close()'",
-            returnStdout: true
-          ).trim()
-
-          echo "Using port ${testPort} for testing"
-
           // Basic smoke test - run container and check if it starts
           sh """
             # Clean up any existing test container first
             docker stop test-container-${env.BUILD_NUMBER} 2>/dev/null || true
             docker rm test-container-${env.BUILD_NUMBER} 2>/dev/null || true
 
-            # Run container in detached mode with dynamic port
+            # Run container in detached mode without port mapping (internal test)
             docker run -d --name test-container-${env.BUILD_NUMBER} \
-              -p ${testPort}:8080 \
               -e ENABLE_SERVICE_X=${params.ENABLE_SERVICE_X} \
               ${env.DOCKER_IMAGE_TAG}
 
@@ -169,33 +160,40 @@ pipeline {
             for i in \$(seq 1 30); do
               if docker ps | grep test-container-${env.BUILD_NUMBER} > /dev/null; then
                 echo "Container is running, waiting for application startup..."
-                sleep 5
+                sleep 10
                 break
               fi
               echo "Waiting for container... (\$i/30)"
               sleep 2
             done
 
-            # Check container logs for any startup issues
+            # Check container logs for startup completion
             echo "Container logs:"
             docker logs test-container-${env.BUILD_NUMBER}
 
-            # Wait a bit more for Spring Boot to fully start
+            # Wait for Spring Boot to fully start
             echo "Waiting for Spring Boot application to start..."
-            sleep 20
+            sleep 15
 
-            # Test if application is responding
-            echo "Testing application health on port ${testPort}..."
-            curl -f --retry 5 --retry-delay 5 --retry-connrefused http://localhost:${testPort}/customer || (
-              echo "❌ Health check failed"
-              echo "Container status:"
+            # Test application health using docker exec (internal to container)
+            echo "Testing application health internally..."
+            docker exec test-container-${env.BUILD_NUMBER} curl -f http://localhost:8080/customer || (
+              echo "❌ Internal health check failed"
+              echo "Final container status:"
               docker ps -a | grep test-container-${env.BUILD_NUMBER}
-              echo "Container logs:"
+              echo "Final container logs:"
               docker logs test-container-${env.BUILD_NUMBER}
               exit 1
             )
 
-            echo "✅ Docker image test passed on port ${testPort}"
+            # Additional checks
+            echo "✅ Docker image test passed - Spring Boot started successfully"
+            echo "Verifying container is still running..."
+            docker ps | grep test-container-${env.BUILD_NUMBER}
+
+            # Show some final logs to confirm everything is working
+            echo "Final application logs:"
+            docker logs --tail 10 test-container-${env.BUILD_NUMBER}
           """
         }
       }
@@ -204,7 +202,7 @@ pipeline {
           // Clean up test container
           sh """
             echo "Cleaning up test container..."
-            docker logs test-container-${env.BUILD_NUMBER} || true
+            docker logs --tail 20 test-container-${env.BUILD_NUMBER} || true
             docker stop test-container-${env.BUILD_NUMBER} || true
             docker rm test-container-${env.BUILD_NUMBER} || true
           """
