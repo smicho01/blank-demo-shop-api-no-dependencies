@@ -17,8 +17,8 @@ pipeline {
   }
 
   environment {
-    DOCKER_IMAGE_NAME = 'blank-demo-api'
-    DOCKER_REGISTRY = 'your-dockerhub-username' // Update this with your Docker Hub username
+    DOCKER_IMAGE_NAME = 'blank-demo-shop-api'
+    DOCKER_REGISTRY = 'sever3d'
     MAVEN_OPTS = '-Dmaven.repo.local=.m2/repository'
   }
 
