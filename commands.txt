@@ -1,0 +1,16 @@
+# Build and start services
+docker-compose up --build
+
+# Run in background
+docker-compose up -d --build
+
+# Stop services
+docker-compose down
+
+
+
+# Build image
+docker build -t blank-demo-api .
+
+# Run container
+docker run -p 8080:8080 -e ENABLE_SERVICE_X=false blank-demo-api

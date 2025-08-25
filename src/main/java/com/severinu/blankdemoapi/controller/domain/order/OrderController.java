@@ -1,5 +1,6 @@
 package com.severinu.blankdemoapi.controller.domain.order;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
@@ -8,6 +9,7 @@ import java.util.Optional;
 
 @RestController
 @RequestMapping("/order")
+@Slf4j
 public class OrderController {
 
     private List<Order> orders = new ArrayList<>();
@@ -20,6 +22,7 @@ public class OrderController {
 
     @GetMapping("/{id}")
     public Order getOrderById(@PathVariable Long id) {
+        log.info("[GET] /order/{id} getOrderById");
         return orders.stream()
                 .filter(order -> order.getId().equals(id))
                 .findFirst()
@@ -28,6 +31,7 @@ public class OrderController {
 
     @PostMapping
     public Order createOrder(@RequestBody Order order) {
+        log.info("[POST] /order createOrder");
         order.setId(nextId++);
         orders.add(order);
         return order;
@@ -35,6 +39,7 @@ public class OrderController {
 
     @PutMapping("/{id}")
     public Order updateOrder(@PathVariable Long id, @RequestBody Order updatedOrder) {
+        log.info("[PUT] /order/{id} updateOrder");
         Optional<Order> existingOrder = orders.stream()
                 .filter(order -> order.getId().equals(id))
                 .findFirst();
@@ -50,6 +55,7 @@ public class OrderController {
 
     @DeleteMapping("/{id}")
     public String deleteOrder(@PathVariable Long id) {
+        log.info("[DELETE] /order/{id} deleteOrder");
         boolean removed = orders.removeIf(order -> order.getId().equals(id));
         return removed ? "Order deleted successfully" : "Order not found";
     }
