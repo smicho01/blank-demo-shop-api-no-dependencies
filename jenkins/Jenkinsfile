@@ -10,7 +10,7 @@ pipeline {
     booleanParam(name: 'RUN_TESTS', defaultValue: true, description: 'Run the Test stage')
     booleanParam(name: 'RUN_TESTS_COVERAGE', defaultValue: true, description: 'Run the Test Coverage stage')
     booleanParam(name: 'BUILD_DOCKER_IMAGE', defaultValue: true, description: 'Build Docker image')
-    booleanParam(name: 'PUSH_DOCKER_IMAGE', defaultValue: false, description: 'Push Docker image to registry')
+    booleanParam(name: 'PUSH_DOCKER_IMAGE', defaultValue: true, description: 'Push Docker image to registry')
     choice(name: 'ENVIRONMENT', choices: ['ec2-xlarge-dev1', 'ec2-xlarge-dev2', 'ec2-xlarge-prod'], description: 'Select the environment to deploy to')
     string(name: 'DEPLOY_BRANCH', defaultValue: 'master', description: 'Which branch to deploy')
     string(name: 'DOCKER_TAG', defaultValue: 'latest', description: 'Docker image tag')
